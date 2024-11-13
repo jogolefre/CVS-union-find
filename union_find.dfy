@@ -2,150 +2,170 @@ class UF {
     var size: nat
     var link: array<nat>
     var rank: array<nat>
-    ghost var rep : seq<nat>
+    ghost var rep: seq<nat>
 
-    var dst : array<nat>
-    ghost var maxd : nat
+    var dst: array<nat>
+    ghost var maxd: nat
 
-    ghost predicate DFInv ()
-      reads this
-    {
-        true
-    }
-
-    ghost predicate Valid ()
-      reads this
+    ghost predicate LinkValid()
+        reads this, link
     {
         link.Length == size &&
-        rank.Length == size &&
-        dst.Length == size &&
-        (forall i :: 0 <= i < size ==> link[i] < size) &&
+        (forall i :: 0 <= i < size ==> link[i] < size)
+    }
+
+    ghost predicate RepValid()
+        reads this
+    {
+        |rep| == size &&
         (forall i :: 0 <= i < size ==> rep[i] < size && rep[rep[i]] == rep[i])
     }
 
-    constructor (n: nat)
-      ensures Valid()
+    ghost predicate Valid()
+        reads this, link, rank, dst
+    {
+        LinkValid() &&
+        RepValid() &&
+        rank.Length == size &&
+        dst.Length == size
+    }
+
+    constructor(n: nat)
+        ensures Valid()
     {
         link := new nat[n](i => i);
         size := n;
         rank := new nat[n](i => 0);
 
-        var tmp := new nat[n](i => i);
-        rep := tmp[..];
+        rep := seq(n, i => i);
 
         dst := new nat[n](i => 0);
         maxd := 0;
-
-        // Now that all fields are initialized, we can assert DFInv
-        assert DFInv();
     }
 
-    method{:isolate_assertions} findIt (x: nat) returns (r: nat)
-      requires Valid()
-      ensures Valid()
-      ensures r == link[r] && rep[x] == rep[r]
+    method{:isolate_assertions} findIt(x: nat) returns (r: nat)
+        requires Valid() && 0 <= x < size
+        ensures Valid()
+        ensures 0 <= r < size && r == link[r] && rep[x] == rep[r]
+        decreases size - x
+        modifies link
     {
-      var y := link[x];
+        var y := link[x];
 
-      while (y != link[y])
-      {
-        y := link[y];
-      }
+        while (y != link[y])
+            invariant 0 <= y < size
+            invariant Valid()
+            decreases size - y
+        {
+            y := link[y];
+        }
 
-      return y;
+        return y;
     }
 
     function findRep(x: nat): nat
-      requires 0 <= x < size
-      ensures link[findRep(x)] == findRep(x)
+        requires 0 <= x < size
+        ensures link[findRep(x)] == findRep(x)
     {
-      if (link[x] == x) then x else findRep(link[x])
+        if link[x] == x then x else findRep(link[x])
     }
 
-    method{:isolate_assertions} find (x: nat) returns (r: nat)
-      requires Valid()
-      ensures Valid()
-      ensures r == link[r] && rep[x] == rep[r]
+    method{:isolate_assertions} find(x: nat) returns (r: nat)
+        requires Valid() && 0 <= x < size
+        ensures Valid()
+        ensures 0 <= r < size && r == link[r] && rep[x] == rep[r]
+        decreases if link[x] == x then 0 else size - x
+        modifies link
     {
-      if (link[x] != x) {
-        var parent := this.find(link[x]); // Store the result of the recursive call
-        link[x] := parent; // Path compression
-        return parent;
-      }
-      return link[x];
+        if link[x] != x {
+            var parent := this.find(link[x]);
+            link[x] := parent; // Path compression
+            return parent;
+        }
+        return link[x];
     }
 
-    method{:isolate_assertions} same (x: nat, y: nat) returns (r: bool)
-      requires Valid()
-      ensures Valid()
-      ensures r == (findRep(x) == findRep(y))
+    method{:isolate_assertions} same(x: nat, y: nat) returns (r: bool)
+        requires Valid() && 0 <= x < size && 0 <= y < size
+        ensures Valid()
+        ensures r == (findRep(x) == findRep(y))
+        modifies link
     {
-      var a := find(x);
-      var b := find(y);
+        var a := find(x);
+        var b := find(y);
 
-      r := a == b;
+        r := a == b;
     }
 
-    function max(x: nat, y: nat) : nat
-    {
-      if (x <= y) then y
-      else x
+    function max(x: nat, y: nat): nat {
+        if x <= y then y else x
     }
 
     method Max(x: nat, y: nat) returns (r: nat)
-      ensures r == max(x, y)
+        ensures r == max(x, y)
     {
-      if (x <= y) { return y; }
-      else { return x; }
+        if x <= y {
+            return y;
+        } else {
+            return x;
+        }
     }
 
-    function{:axiom} updateRep (rep: seq<nat>, r: nat, v: nat) : seq<nat>
-      requires 0 <= r < |rep|
-      ensures |rep| == |updateRep(rep, r, v)|
-      ensures forall z : nat :: (z < |rep| && rep[z] == r) ==> updateRep(rep, r, v)[z] == v
-      ensures forall z : nat :: (z < |rep| && rep[z] != r) ==> updateRep(rep, r, v)[z] == rep[z]
-
-    method{:isolate_assertions} union (x: nat, y: nat) returns (ghost oldRep: nat)
-      requires Valid()
-      ensures Valid()
-      ensures oldRep == findRep(x) || oldRep == findRep(y)
+    function updateRep(rep: seq<nat>, r: nat, v: nat): seq<nat>
+        requires 0 <= r < |rep|
+        ensures |rep| == |updateRep(rep, r, v)|
+        ensures forall z: nat :: (z < |rep| && rep[z] == r) ==> updateRep(rep, r, v)[z] == v
+        ensures forall z: nat :: (z < |rep| && rep[z] != r) ==> updateRep(rep, r, v)[z] == rep[z]
     {
-      var rx := find(x);
-      var ry := find(y);
+        rep[0..r] + [v] + rep[r+1..]
+    }
 
-      if (rx == ry) {
-        return rx;
-      }
-      else {
-        var rkx := rank[rx];
-        var rky := rank[ry];
-        var maxDst := Max(dst[rx], dst[ry]);
-
-        if (rkx < rky) {
-          link[rx] := ry;
-
-          dst[ry] := 1 + maxDst;
-
-          rep := updateRep(rep, rep[x], ry);
-         
-          maxd := maxd + 1;
-
-          return ry;
+    ghost method updateRepGhost(x: nat, y: nat)
+        requires Valid() && 0 <= x < size && 0 <= y < size
+    {
+        if 0 <= x < size && 0 <= rep[x] < size {
+            rep := updateRep(rep, x, y);
         }
-        else {
-          link[ry] := rx;
+    }
 
-          rep := updateRep(rep, rep[y], rx);
+    method{:isolate_assertions} union(x: nat, y: nat) returns (ghost oldRep: nat)
+        requires Valid() && 0 <= x < size && 0 <= y < size
+        ensures Valid()
+        ensures oldRep == findRep(x) || oldRep == findRep(y)
+        modifies this, link, rank, dst
+    {
+        var rx := find(x);
+        var ry := find(y);
 
-          dst[rx] := 1 + maxDst;
+        if rx == ry {
+            return rx;
+        } else {
+            var rkx := if 0 <= rx < size then rank[rx] else 0;
+            var rky := if 0 <= ry < size then rank[ry] else 0;
+            var maxDst := Max(dst[rx], dst[ry]);
 
-          maxd := maxd + 1;
+            if rkx < rky {
+                link[rx] := ry;
+                dst[ry] := 1 + maxDst;
+                if 0 <= x < size {
+                    updateRepGhost(x, ry); // Update rep indirectly using ghost method
+                }
+                maxd := maxd + 1;
+                return ry;
+            } else {
+                link[ry] := rx;
+                dst[rx] := 1 + maxDst;
+                if 0 <= y < size {
+                    updateRepGhost(y, rx); // Update rep indirectly using ghost method
+                }
+                maxd := maxd + 1;
 
-          if (rkx == rky) { rank[rx] := rkx + 1; }
-          else { }
+                if rkx == rky {
+                    rank[rx] := rkx + 1;
+                }
 
-          return rx;
+                return rx;
+            }
         }
-      }
     }
 }
